@@ -1,5 +1,6 @@
+import cloudinary from "../config/cloudinary.js";
 import Product from "../models/product.model.js";
-
+import Image from "../models/image.model.js";
 export const getProducts = async (req, res) => {
   try {
     // Get page and limit from query params, set defaults
@@ -141,6 +142,75 @@ export const getProductById = async (req, res) => {
     }
 
     res.json(product);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const uploadProductImages = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    // Kiểm tra sản phẩm tồn tại
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Không tìm thấy sản phẩm" });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "Chưa chọn ảnh upload" });
+    }
+
+    // Upload tất cả ảnh lên Cloudinary
+    const uploadPromises = req.files.map(async (file) => {
+      const b64 = Buffer.from(file.buffer).toString("base64");
+      const dataURI = `data:${file.mimetype};base64,${b64}`;
+
+      const result = await cloudinary.uploader.upload(dataURI, {
+        public_id: `products/${productId}/${Date.now()}`,
+        resource_type: "auto",
+      });
+
+      return result.secure_url;
+    });
+
+    const imageUrls = await Promise.all(uploadPromises);
+
+    // Cập nhật URLs vào sản phẩm
+    product.images = [...product.images, ...imageUrls];
+    await product.save();
+
+    res.status(200).json({
+      message: "Upload ảnh thành công",
+      images: imageUrls,
+      product,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+// Add function to delete product images
+export const deleteProductImage = async (req, res) => {
+  try {
+    const { productId, imageUrl } = req.params;
+
+    // Extract public_id from URL
+    const publicId = imageUrl.split("/").slice(-2).join("/").split(".")[0];
+
+    // Delete from Cloudinary
+    await cloudinary.uploader.destroy(`products/${publicId}`);
+
+    // Remove URL from product
+    const product = await Product.findByIdAndUpdate(
+      productId,
+      { $pull: { images: imageUrl } },
+      { new: true }
+    );
+
+    res.json({
+      message: "Image deleted successfully",
+      product,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
